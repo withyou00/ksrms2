@@ -28453,6 +28453,7 @@ function injectBulkStudentEditModalHTML() {
 
             // ---------------- Admin: Secret Key ಗಳನ್ನು ksrms_secrets ಗೆ ಸಿಂಕ್ ----------------
             let syncTimer = null, syncing = false;
+            let deniedRetries = 0;
             async function syncSecrets(showResult) {
                 if (syncing) return;
                 const u = auth.currentUser;
@@ -28489,12 +28490,17 @@ function injectBulkStudentEditModalHTML() {
                         ss.forEach(d => { const x = d.data() || {}; if (x.dise) ds.add(String(x.dise)); });
                         licIds.forEach(id => { if (ds.has(id)) migrated++; });
                     } catch (e) {}
+                    deniedRetries = 0;
                     window.ksrmsSecureStatus = { schools: licIds.size, migrated, updated: ops.length };
                     if (showResult || ops.length) toast6(`🔐 ಸುರಕ್ಷಿತ ಲಾಗಿನ್: ${licIds.size} ಶಾಲೆಗಳ Key ಸಿದ್ಧ · ${migrated} ಶಾಲೆಗಳು ಹೊಸ ಲಾಗಿನ್ ಬಳಸುತ್ತಿವೆ`);
                     console.log('[KSRMS V6] secrets synced', window.ksrmsSecureStatus);
                 } catch (e) {
                     console.warn('[KSRMS V6] secret sync failed', e && e.code);
-                    if (e && e.code === 'permission-denied') toast6('⚠️ ಸುರಕ್ಷಿತ ಲಾಗಿನ್ ಸಿಂಕ್ ಆಗಲಿಲ್ಲ: Firebase Rules (ಹಂತ-1) ಇನ್ನೂ Publish ಆಗಿಲ್ಲ ಅಥವಾ Admin ಇಮೇಲ್ ಹೊಂದುತ್ತಿಲ್ಲ.');
+                    if (e && e.code === 'permission-denied' && deniedRetries < 2) {
+                        // ಲಾಗಿನ್ ಆದ ತಕ್ಷಣ Firebase ಗೆ ಹೊಸ Admin ಗುರುತು ತಲುಪಲು ಕೆಲವು ಸೆಕೆಂಡು ಬೇಕು → ಮೌನವಾಗಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ
+                        deniedRetries++;
+                        setTimeout(() => syncSecrets(showResult), 4000);
+                    } else if (e && e.code === 'permission-denied') toast6('⚠️ ಸುರಕ್ಷಿತ ಲಾಗಿನ್ ಸಿಂಕ್ ಆಗಲಿಲ್ಲ: Firebase Rules (ಹಂತ-1) ಇನ್ನೂ Publish ಆಗಿಲ್ಲ ಅಥವಾ Admin ಇಮೇಲ್ ಹೊಂದುತ್ತಿಲ್ಲ.');
                 } finally {
                     syncing = false;
                 }
