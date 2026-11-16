@@ -28527,11 +28527,12 @@ function injectBulkStudentEditModalHTML() {
                 const u = auth.currentUser;
                 if (!u || u.isAnonymous || !currentSession || currentSession.role !== 'admin') return;
                 syncing = true;
+                let step = 'ಶಾಲೆಗಳ ಪಟ್ಟಿ ಓದುವುದು';
                 try {
-                    const [licSnap, secSnap] = await Promise.all([
-                        db.collection('ksrms_licenses').get(),
-                        db.collection('ksrms_secrets').get()
-                    ]);
+                    const licSnap = await db.collection('ksrms_licenses').get();
+                    step = 'Key ಪಟ್ಟಿ ಓದುವುದು';
+                    const secSnap = await db.collection('ksrms_secrets').get();
+                    step = 'Key ಉಳಿಸುವುದು';
                     const secMap = {};
                     secSnap.forEach(d => { secMap[d.id] = (d.data() || {}).keyNorm; });
                     const ops = [];
@@ -28564,11 +28565,15 @@ function injectBulkStudentEditModalHTML() {
                     console.log('[KSRMS V6] secrets synced', window.ksrmsSecureStatus);
                 } catch (e) {
                     console.warn('[KSRMS V6] secret sync failed', e && e.code);
-                    if (e && e.code === 'permission-denied' && deniedRetries < 2) {
+                    if (e && e.code === 'permission-denied' && deniedRetries < 3) {
                         // ಲಾಗಿನ್ ಆದ ತಕ್ಷಣ Firebase ಗೆ ಹೊಸ Admin ಗುರುತು ತಲುಪಲು ಕೆಲವು ಸೆಕೆಂಡು ಬೇಕು → ಮೌನವಾಗಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ
                         deniedRetries++;
-                        setTimeout(() => syncSecrets(showResult), 4000);
-                    } else if (e && e.code === 'permission-denied') toast6('⚠️ ಸುರಕ್ಷಿತ ಲಾಗಿನ್ ಸಿಂಕ್ ಆಗಲಿಲ್ಲ: Firebase Rules (ಹಂತ-1) ಇನ್ನೂ Publish ಆಗಿಲ್ಲ ಅಥವಾ Admin ಇಮೇಲ್ ಹೊಂದುತ್ತಿಲ್ಲ.');
+                        setTimeout(() => syncSecrets(showResult), 5000);
+                    } else {
+                        const em = (auth.currentUser && auth.currentUser.email) || 'ಇಮೇಲ್ ಇಲ್ಲ';
+                        toast6(`⚠️ ಸುರಕ್ಷಿತ ಲಾಗಿನ್ ಸಿಂಕ್ ಆಗಲಿಲ್ಲ (${step} · ${(e && e.code) || 'error'} · ${em}). ಶಾಲೆಗಳು ಸರಿಯಾಗಿ ಕಾಣುತ್ತಿದ್ದರೆ ಚಿಂತೆ ಬೇಡ — ಪುಟ refresh ಮಾಡಿ ಮತ್ತೆ Admin ಲಾಗಿನ್ ಆಗಿ. ಮತ್ತೆ ಬಂದರೆ ಈ ಸಂದೇಶದ screenshot ತೆಗೆಯಿರಿ.`);
+                        deniedRetries = 0;
+                    }
                 } finally {
                     syncing = false;
                 }
@@ -28594,11 +28599,18 @@ function injectBulkStudentEditModalHTML() {
 
             function toast6(msg) {
                 try {
+                    const warn = /^⚠️/.test(msg);
                     const t = document.createElement('div');
-                    t.style.cssText = 'position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:100002;background:#212529;color:#fff;padding:10px 16px;border-radius:8px;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,.3);max-width:92vw;';
+                    t.style.cssText = 'position:fixed;left:50%;top:16px;transform:translateX(-50%);z-index:100002;background:' + (warn ? '#842029' : '#212529') + ';color:#fff;padding:10px 40px 10px 16px;border-radius:8px;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,.3);max-width:92vw;';
                     t.textContent = msg;
+                    const x = document.createElement('button');
+                    x.type = 'button'; x.textContent = '✕';
+                    x.style.cssText = 'position:absolute;right:8px;top:6px;background:none;border:0;color:#fff;font-size:18px;cursor:pointer;';
+                    x.onclick = () => t.remove();
+                    t.appendChild(x);
                     document.body.appendChild(t);
-                    setTimeout(() => t.remove(), 8000);
+                    // ಎಚ್ಚರಿಕೆಗಳು ✕ ಒತ್ತುವವರೆಗೆ ಉಳಿಯುತ್ತವೆ; ಸಾಮಾನ್ಯ ಸಂದೇಶ 10 ಸೆಕೆಂಡು
+                    if (!warn) setTimeout(() => t.remove(), 10000);
                 } catch (e) {}
             }
 
@@ -31325,7 +31337,7 @@ function injectBulkStudentEditModalHTML() {
                     <style>@page{size:A4 landscape;margin:12mm 12mm 12mm 12mm}*{box-sizing:border-box}html,body{width:100%}body{font-family:'Anek Kannada',sans-serif;font-size:11px;color:#111;margin:0;-webkit-print-color-adjust:exact;print-color-adjust:exact}@media screen{body{padding:12mm;background:#888}.sheet{background:#fff;padding:6mm;max-width:297mm;margin:auto}}
                     h1{text-align:center;color:#8b0000;margin:0 0 2px;font-size:18px}h2{text-align:center;margin:0 0 6px;font-size:13px;color:#0b5394}
                     .info{display:grid;grid-template-columns:repeat(4,1fr);gap:2px 10px;border:1px solid #0b5394;padding:5px 8px;margin-bottom:6px;font-size:11.5px}
-                    table{width:100%;border-collapse:collapse;table-layout:auto}th,td{border:1px solid #777;padding:2px 3px;text-align:center}th{background:#0b5394;color:#fff;font-size:10px}
+                    table{width:100%;border-collapse:collapse;table-layout:auto}th,td{border:1px solid #555;padding:2px 3px;text-align:center}th{background:#f2f2f2;color:#000;font-size:10px;font-weight:700}th .les{color:#222}
                     td.l{text-align:left}.les{font-weight:400;font-size:9px;line-height:1.15}.sum{display:flex;gap:16px;margin-top:6px;flex-wrap:wrap}
                     .box{border:1px solid #999;padding:4px 8px;border-radius:4px}.sig{display:flex;justify-content:space-between;margin-top:28px;font-weight:700}
                     tr{page-break-inside:avoid}.sum,.sig{page-break-inside:avoid}</style></head><body><div class="sheet">
