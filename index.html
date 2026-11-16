@@ -30791,6 +30791,16 @@ function injectBulkStudentEditModalHTML() {
             const docKey = (g, s, m) => `${g}__${s}__${m}`.replace(/[\/]/g, '-');
             const lessonLabel = l => `${l[1] ? l[1] + '. ' : ''}${l[2]}`;
             const lessonKey = l => `${l[0]}|${String(l[2]).replace(/\s+/g, '')}`;
+            // Firestore ನಲ್ಲಿ ಪಟ್ಟಿಯೊಳಗೆ ಪಟ್ಟಿ (nested array) ಉಳಿಸಲು ಆಗುವುದಿಲ್ಲ → ಪಾಠವನ್ನು {p,n,t} ವಸ್ತುವಾಗಿ ಉಳಿಸುವುದು
+            const encL = l => ({ p: String(l[0]), n: Number(l[1]) || 0, t: String(l[2]) });
+            const decL = x => Array.isArray(x) ? x : [String((x && x.p) || '1'), Number(x && x.n) || 0, String((x && x.t) || '')];
+            const decDoc = d => {
+                d = d || {};
+                d.tests = d.tests || {}; d.marks = d.marks || {};
+                Object.keys(d.tests).forEach(id => { d.tests[id].lessons = (d.tests[id].lessons || []).map(decL); });
+                d.custom = (d.custom || []).map(decL);
+                return d;
+            };
 
             // ---------------- ವಿಷಯ / ಮಾಧ್ಯಮ ಹೆಸರುಗಳ ಏಕರೂಪತೆ ----------------
             function normSubject(s) {
@@ -30830,7 +30840,7 @@ function injectBulkStudentEditModalHTML() {
                         let e = list.find(x => x.s === it.s && x.m === it.m);
                         if (!e) { e = { s: it.s, m: it.m, l: [] }; list.push(e); }
                         const have = new Set(e.l.map(lessonKey));
-                        (it.l || []).forEach(l => { if (!have.has(lessonKey(l))) { e.l.push(l); have.add(lessonKey(l)); } });
+                        (it.l || []).map(decL).forEach(l => { if (!have.has(lessonKey(l))) { e.l.push(l); have.add(lessonKey(l)); } });
                     });
                     list.forEach(e => { e.l = e.l.filter(l => !removed.has(`${e.s}|${e.m}|${lessonKey(l)}`)); e.l.sort((a, b) => (a[0] - b[0]) || ((a[1] || 999) - (b[1] || 999))); });
                 } catch (e) {}
@@ -30973,7 +30983,7 @@ function injectBulkStudentEditModalHTML() {
                 stopListen();
                 if (!S.cls) { renderGrid(); return; }
                 S.doc = null;
-                S.unsub = lbaRef().onSnapshot(d => { S.doc = d.exists ? (d.data() || {}) : { tests: {}, marks: {}, custom: [] }; renderGrid(); },
+                S.unsub = lbaRef().onSnapshot(d => { S.doc = decDoc(d.exists ? d.data() : null); renderGrid(); },
                     e => { const g = document.getElementById('lbaGrid'); if (g) g.innerHTML = `<div class="alert alert-danger">LBA ಡೇಟಾ ತೆರೆಯಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ (${esc(e && e.code)}). ಹೊಸ Firebase Rules Publish ಆಗಿದೆಯೇ ನೋಡಿ.</div>`; });
             }
 
@@ -31104,7 +31114,7 @@ function injectBulkStudentEditModalHTML() {
                     const l = [w.querySelector('#ltNewPart').value, Number(w.querySelector('#ltNewNo').value) || 0, name];
                     const checked = [...w.querySelectorAll('.lbaL:checked')].map(x => JSON.parse(x.value));
                     try {
-                        await lbaRef().set({ g: gradeOf(S.cls), className: S.cls, subject: S.subject, medium: S.medium, custom: firebase.firestore.FieldValue.arrayUnion(l), updatedAt: Date.now() }, { merge: true });
+                        await lbaRef().set({ g: gradeOf(S.cls), className: S.cls, subject: S.subject, medium: S.medium, custom: firebase.firestore.FieldValue.arrayUnion(encL(l)), updatedAt: Date.now() }, { merge: true });
                         S.doc = S.doc || {}; S.doc.custom = (S.doc.custom || []).concat([l]);
                         w.querySelector('#ltLessons').innerHTML = lessonPickerHtml(checked.concat([l]));
                         w.querySelector('#ltNewName').value = ''; w.querySelector('#ltNewNo').value = '';
@@ -31130,7 +31140,7 @@ function injectBulkStudentEditModalHTML() {
                     if (over && !confirm(`ಕೆಲವು ಮಕ್ಕಳ ಅಂಕ ${max} ಕ್ಕಿಂತ ಹೆಚ್ಚಿದೆ. ಆದರೂ ಉಳಿಸಬೇಕೇ?`)) return;
                     try {
                         await lbaRef().set({ g: gradeOf(S.cls), className: S.cls, subject: S.subject, medium: S.medium, updatedAt: Date.now() }, { merge: true });
-                        await lbaRef().update(FP('tests', t.id), { no, max, date: w.querySelector('#ltDate').value || '', lessons, updatedAt: Date.now() });
+                        await lbaRef().update(FP('tests', t.id), { no, max, date: w.querySelector('#ltDate').value || '', lessons: lessons.map(encL), updatedAt: Date.now() });
                         w.remove();
                     } catch (e) { alert('ಉಳಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ: ' + ((e && e.code) || e)); }
                 };
@@ -31214,7 +31224,7 @@ function injectBulkStudentEditModalHTML() {
                         const args = [];
                         testCols.forEach((tc, i) => {
                             const ex = curTests[tids[i]] || {};
-                            args.push(FP('tests', tids[i]), { no: tc.no, max: maxes[i], date: ex.date || '', lessons: ex.lessons || [], source: 'SATS', updatedAt: Date.now() });
+                            args.push(FP('tests', tids[i]), { no: tc.no, max: maxes[i], date: ex.date || '', lessons: (ex.lessons || []).map(decL).map(encL), source: 'SATS', updatedAt: Date.now() });
                         });
                         let bad = 0;
                         matched.forEach(({ d, st }) => d.marks.forEach((v, i) => {
@@ -31367,10 +31377,11 @@ function injectBulkStudentEditModalHTML() {
                                 byG[g].forEach(r => {
                                     let it = items.find(x => x.s === r.s && x.m === r.m);
                                     if (!it) { it = { s: r.s, m: r.m, l: [] }; items.push(it); }
+                                    it.l = (it.l || []).map(decL);
                                     const have = new Set(it.l.map(lessonKey));
                                     r.fresh.forEach(l => { if (!have.has(lessonKey(l))) it.l.push(l); });
                                 });
-                                await ref.set({ items, updatedAt: Date.now() }, { merge: true });
+                                await ref.set({ items: items.map(it => ({ s: it.s, m: it.m, l: it.l.map(decL).map(encL) })), updatedAt: Date.now() }, { merge: true });
                                 delete catalogCache[g];
                             }
                             prev.innerHTML = `<div class="alert alert-success py-2">✅ ${newCount} ಪಾಠಗಳನ್ನು ಸೇರಿಸಲಾಗಿದೆ. ಎಲ್ಲಾ ಶಾಲೆಗಳಿಗೂ ತಕ್ಷಣ ಕಾಣುತ್ತದೆ.</div>`;
