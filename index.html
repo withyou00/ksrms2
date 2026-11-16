@@ -31003,6 +31003,16 @@ function injectBulkStudentEditModalHTML() {
                 const box = document.getElementById('lbaGrid'); if (!box) return;
                 if (!S.cls) { box.innerHTML = '<div class="text-muted">ಮೊದಲು ವಿದ್ಯಾರ್ಥಿಗಳನ್ನು ಸೇರಿಸಿ.</div>'; return; }
                 if (!S.doc) return;
+                // ಮರು-ಚಿತ್ರಿಸುವ ಮೊದಲು: scroll ಸ್ಥಾನ ಮತ್ತು ಈಗ ಟೈಪ್ ಮಾಡುತ್ತಿರುವ ಮಗುವಿನ ಕೋಶ ನೆನಪಿಡಿ
+                const oldWrap = box.querySelector('.table-responsive');
+                const keep = {
+                    top: oldWrap ? oldWrap.scrollTop : 0, left: oldWrap ? oldWrap.scrollLeft : 0, winY: window.scrollY, winX: window.scrollX,
+                    focus: null
+                };
+                const act = document.activeElement;
+                if (act && box.contains(act) && act.classList.contains('lba-in')) {
+                    keep.focus = { sid: act.getAttribute('data-sid'), tid: act.getAttribute('data-tid'), val: act.value, dirty: act.value !== act.defaultValue, s0: act.selectionStart, s1: act.selectionEnd };
+                }
                 const tests = testsSorted();
                 const sts = students();
                 const editable = canEditClass(S.cls);
@@ -31024,7 +31034,7 @@ function injectBulkStudentEditModalHTML() {
                             const v = markOf(String(s.id), t.id);
                             const g = v === '' ? '' : gradeForPct(Number(v) / Number(t.max) * 100);
                             return `<td><div class="d-flex align-items-center gap-1 justify-content-center">
-                                <input type="number" min="0" max="${t.max}" step="0.5" class="form-control form-control-sm text-center lba-in" style="width:56px;" value="${esc(v)}" data-sid="${esc(s.id)}" data-tid="${esc(t.id)}" ${editable ? '' : 'disabled'}>
+                                <input type="text" inputmode="decimal" autocomplete="off" maxlength="5" class="form-control form-control-sm text-center lba-in" style="width:56px;" value="${esc(v)}" data-sid="${esc(s.id)}" data-tid="${esc(t.id)}" ${editable ? '' : 'disabled'}>
                                 <b style="color:${gradeColor(g)};min-width:22px;font-size:12px;">${g}</b></div></td>`;
                         }).join('')}
                         <td class="fw-bold">${sum.pct === null ? '-' : sum.pct.toFixed(1) + '%'}</td>
@@ -31039,12 +31049,37 @@ function injectBulkStudentEditModalHTML() {
                 box.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editTest(testsSorted().find(t => t.id === b.getAttribute('data-edit'))));
                 box.querySelectorAll('.lba-in').forEach(inp => inp.onchange = () => saveMark(inp));
                 box.querySelectorAll('.lba-in').forEach(inp => inp.onkeydown = e => {
-                    if (e.key === 'Enter' || e.key === 'ArrowDown') {
-                        e.preventDefault();
-                        const all = [...box.querySelectorAll(`.lba-in[data-tid="${inp.getAttribute('data-tid')}"]`)];
-                        const nx = all[all.indexOf(inp) + 1]; if (nx) nx.focus();
+                    const step = (e.key === 'Enter' || e.key === 'ArrowDown') ? 1 : (e.key === 'ArrowUp' ? -1 : 0);
+                    if (!step) return;
+                    e.preventDefault();
+                    const tid = inp.getAttribute('data-tid');
+                    const all = [...box.querySelectorAll(`.lba-in[data-tid="${CSS.escape(tid)}"]`)];
+                    const nx = all[all.indexOf(inp) + step]; if (!nx) return;
+                    const nsid = nx.getAttribute('data-sid');
+                    // ಅಂಕ ಉಳಿಸಿದಾಗ ಪಟ್ಟಿ ಮರು-ಚಿತ್ರವಾಗಬಹುದು — ಆದ್ದರಿಂದ ಮುಂದಿನ ಕೋಶವನ್ನು ಹೊಸ ಪಟ್ಟಿಯಲ್ಲಿ ಹುಡುಕಿ
+                    inp.blur();
+                    const live = box.querySelector(`.lba-in[data-sid="${CSS.escape(nsid)}"][data-tid="${CSS.escape(tid)}"]`) || nx;
+                    try { live.focus({ preventScroll: true }); } catch (er) { live.focus(); }
+                    try { live.select(); } catch (er) {}
+                    const wrap = box.querySelector('.table-responsive');
+                    if (wrap) {
+                        const r = live.getBoundingClientRect(), w = wrap.getBoundingClientRect();
+                        if (r.bottom > w.bottom - 4) wrap.scrollTop += r.bottom - w.bottom + 40;
+                        else if (r.top < w.top + 60) wrap.scrollTop -= (w.top + 60) - r.top + 10;
                     }
                 });
+                // ಹಿಂದಿನ scroll ಮತ್ತು ಕೋಶ ಮರುಸ್ಥಾಪನೆ — ಅಂಕ ಉಳಿಸಿದ ನಂತರ ಪಟ್ಟಿ ಮೇಲಕ್ಕೆ ಹಾರುವುದಿಲ್ಲ
+                const wrap = box.querySelector('.table-responsive');
+                if (wrap) { wrap.scrollTop = keep.top; wrap.scrollLeft = keep.left; }
+                if (keep.focus) {
+                    const el = box.querySelector(`.lba-in[data-sid="${CSS.escape(keep.focus.sid)}"][data-tid="${CSS.escape(keep.focus.tid)}"]`);
+                    if (el) {
+                        if (keep.focus.dirty) el.value = keep.focus.val;
+                        try { el.focus({ preventScroll: true }); } catch (e) { el.focus(); }
+                        try { if (keep.focus.s0 !== null) el.setSelectionRange(keep.focus.s0, keep.focus.s1); } catch (e) {}
+                    }
+                }
+                window.scrollTo(keep.winX, keep.winY);
             }
 
             async function saveMark(inp) {
