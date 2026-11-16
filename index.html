@@ -31000,7 +31000,7 @@ function injectBulkStudentEditModalHTML() {
                 }
                 const counts = {};
                 const head = tests.map(t => `<th style="min-width:110px;">
-                        <div class="d-flex justify-content-between align-items-center"><span>ಪ.${t.no}</span>${editable ? `<button type="button" class="btn btn-link btn-sm p-0 text-white" data-edit="${esc(t.id)}" title="ಬದಲಿಸಿ">✏️</button>` : ''}</div>
+                        <div class="d-flex justify-content-between align-items-center"><span>ಪ.${t.no}${t.satsNo !== undefined && Number(t.satsNo) !== Number(t.no) ? `<span class="fw-normal" style="font-size:9px;"> (SATS ${t.satsNo})</span>` : ''}</span>${editable ? `<button type="button" class="btn btn-link btn-sm p-0 text-white" data-edit="${esc(t.id)}" title="ಬದಲಿಸಿ">✏️</button>` : ''}</div>
                         <div class="fw-normal" style="font-size:10px;line-height:1.2;">${(t.lessons || []).map(l => esc(lessonLabel(l))).join('<br>') || '<i>ಪಾಠ ಆಯ್ಕೆ ಮಾಡಿಲ್ಲ</i>'}</div>
                         <div class="fw-normal" style="font-size:10px;">ಗರಿಷ್ಠ ${t.max}${t.date ? ' · ' + esc(t.date) : ''}</div></th>`).join('');
                 const rows = sts.map((s, i) => {
@@ -31122,9 +31122,11 @@ function injectBulkStudentEditModalHTML() {
                 };
                 const del = w.querySelector('#ltDel');
                 if (del) del.onclick = async () => {
-                    if (!confirm(`ಪರೀಕ್ಷೆ ${t.no} ಮತ್ತು ಅದರ ಎಲ್ಲಾ ಅಂಕಗಳನ್ನು ಅಳಿಸಬೇಕೇ?`)) return;
+                    if (!confirm(`ಪರೀಕ್ಷೆ ${t.no} ಮತ್ತು ಅದರ ಎಲ್ಲಾ ಅಂಕಗಳನ್ನು ಅಳಿಸಬೇಕೇ?${(t.satsNo !== undefined || t.source === 'SATS') ? '\n\n(ಇದು ಸರ್ಕಾರಿ Excel ನ ಕಾಲಂ ' + (t.satsNo !== undefined ? t.satsNo : t.no) + ' — ಮುಂದಿನ ಆಮದಿನಲ್ಲಿ ಇದು ತಾನಾಗಿ ಮತ್ತೆ ಬರುವುದಿಲ್ಲ)' : ''}`)) return;
                     try {
                         const args = [FP('tests', t.id), firebase.firestore.FieldValue.delete()];
+                        const sn = t.satsNo !== undefined ? Number(t.satsNo) : (t.source === 'SATS' ? Number(t.no) : null);
+                        if (sn) args.push('importSkip', firebase.firestore.FieldValue.arrayUnion(sn));
                         Object.keys((S.doc && S.doc.marks) || {}).forEach(sid => { if (S.doc.marks[sid] && t.id in S.doc.marks[sid]) args.push(FP('marks', sid, t.id), firebase.firestore.FieldValue.delete()); });
                         await lbaRef().update(...args);
                         w.remove();
@@ -31198,46 +31200,100 @@ function injectBulkStudentEditModalHTML() {
                     const same = data.filter(x => normName(x.name) === normName(d.name)).length;
                     if (c.length === 1 && same === 1) { used.add(c[0]); matched.push({ d, st: c[0], byName: true }); } else unmatched.push(d);
                 });
+                // ಈಗಾಗಲೇ KSRMS ನಲ್ಲಿರುವ ಮಾಹಿತಿ: ಹಿಂದೆ ಯಾವ ಸರ್ಕಾರಿ ಕಾಲಂ ಯಾವ ಪರೀಕ್ಷೆಗೆ ಹೋಗಿತ್ತು, ಯಾವುದನ್ನು ಬೇಡ ಎಂದಿದ್ದೀರಿ
+                const ref = db.collection('ksrms_schools').doc(dise()).collection('lba').doc(docKey(gradeOf(target.cls), target.subject, target.medium));
+                let curDoc = { tests: {}, marks: {}, custom: [] };
+                try { const c = await ref.get(); if (c.exists) curDoc = decDoc(c.data()); } catch (e) {}
+                const skip = new Set((curDoc.importSkip || []).map(Number));
+                const satsNoOf = t => t.satsNo !== undefined ? Number(t.satsNo) : (t.source === 'SATS' ? Number(t.no) : null);
+                const curTests = Object.keys(curDoc.tests).map(id => Object.assign({ id }, curDoc.tests[id]));
+                const tCat = await loadCatalog(gradeOf(target.cls));
+                const lessonPool = []; const seenL = new Set();
+                [...((tCat.find(x => x.s === target.subject && x.m === target.medium) || { l: [] }).l), ...(curDoc.custom || [])].forEach(l => { const k = lessonKey(l); if (!seenL.has(k)) { seenL.add(k); lessonPool.push(l); } });
+                const parts = [...new Set(lessonPool.map(l => String(l[0])))].sort();
+                let nextNo = curTests.reduce((m, t) => Math.max(m, Number(t.no) || 0), 0);
+                const cols = testCols.map((tc, i) => {
+                    const ex = curTests.find(t => satsNoOf(t) === tc.no) || null;
+                    const vals = matched.map(x => x.d.marks[i]).filter(v => v !== '' && !isNaN(Number(v))).map(Number);
+                    return {
+                        tc, i, ex,
+                        on: ex ? true : !skip.has(tc.no),
+                        count: vals.length,
+                        hi: vals.length ? Math.max(...vals) : 0,
+                        avg: vals.length ? (vals.reduce((a, b) => a + b, 0) / vals.length) : 0,
+                        no: ex ? ex.no : null
+                    };
+                });
+                cols.forEach(c => { if (!c.ex) c.no = ++nextNo; });
+                const lessonOpts = sel => `<option value="">— ಪಾಠ ಆರಿಸಿ —</option>` + parts.map(p => `<optgroup label="ಭಾಗ ${esc(p)}">${lessonPool.map((l, k) => String(l[0]) === p ? `<option value="${k}" ${sel && lessonKey(sel) === lessonKey(l) ? 'selected' : ''}>${esc(lessonLabel(l))}</option>` : '').join('')}</optgroup>`).join('');
                 const w = overlay('lbaImpWin', '📥 ಸರ್ಕಾರಿ LBA Excel ಆಮದು', `
                     <div class="border rounded p-2 bg-light mb-2 small">
-                        Excel ನಲ್ಲಿ: ತರಗತಿ <b>${esc(xClass)}</b> · ವಿಷಯ <b>${esc(xSubject)}</b> · ಮಾಧ್ಯಮ <b>${esc(xMedium)}</b> · ${testCols.length} ಪರೀಕ್ಷೆಗಳು · ${data.length} ಮಕ್ಕಳು<br>
+                        Excel ನಲ್ಲಿ: ತರಗತಿ <b>${esc(xClass)}</b> · ವಿಷಯ <b>${esc(xSubject)}</b> · ಮಾಧ್ಯಮ <b>${esc(xMedium)}</b> · ${testCols.length} ಕಾಲಂಗಳು · ${data.length} ಮಕ್ಕಳು<br>
                         KSRMS ನಲ್ಲಿ ಉಳಿಸುವುದು: <b>${esc(target.cls)}</b> · <b>${esc(target.subject)}</b> · <b>${esc(target.medium)}</b></div>
                     <div class="mb-2">✅ <b>${matched.length}</b> ಮಕ್ಕಳು ಹೊಂದಿಕೆಯಾದರು${matched.some(x => x.byName) ? ` (${matched.filter(x => x.byName).length} ಹೆಸರಿನಿಂದ — ಅವರ SATS ಸಂಖ್ಯೆ KSRMS ನಲ್ಲಿ ಇಲ್ಲ)` : ' (SATS ಸಂಖ್ಯೆಯಿಂದ)'}${unmatched.length ? ` · ⚠️ <b class="text-danger">${unmatched.length}</b> ಮಕ್ಕಳು KSRMS ನಲ್ಲಿ ಸಿಗಲಿಲ್ಲ:<div class="small text-danger">${unmatched.map(u => esc(u.name + (u.sats ? ' - ' + u.sats : ''))).join(', ')}</div><div class="small text-muted">ಇವರನ್ನು ಮೊದಲು Students Database ನಲ್ಲಿ (SATS ಸಂಖ್ಯೆ ಸಹಿತ) ಸೇರಿಸಿ, ನಂತರ ಮತ್ತೆ ಆಮದು ಮಾಡಿ.</div>` : ''}</div>
-                    <div class="fw-bold mb-1">ಪ್ರತಿ ಪರೀಕ್ಷೆಯ ಗರಿಷ್ಠ ಅಂಕ</div>
-                    <div class="small text-muted mb-1">ಸರ್ಕಾರಿ Excel ನಲ್ಲಿ ಗರಿಷ್ಠ ಅಂಕ ಇರುವುದಿಲ್ಲ — ನೀವು ತೆಗೆದುಕೊಂಡ ಪರೀಕ್ಷೆಯ ಗರಿಷ್ಠ ಅಂಕ ಹಾಕಿ. ಪಾಠಗಳನ್ನು ಆಮದಿನ ನಂತರ ✏️ ಮೂಲಕ ಆಯ್ಕೆಮಾಡಿ.</div>
-                    <div class="d-flex flex-wrap gap-2 mb-3">${testCols.map((tc, i) => `<div class="input-group input-group-sm" style="width:150px;"><span class="input-group-text">ಪರೀಕ್ಷೆ ${tc.no}</span><input type="number" min="1" class="form-control impMax" data-i="${i}" value="20"></div>`).join('')}</div>
+                    <div class="alert alert-warning py-2 small mb-2">ಸರ್ಕಾರಿ Excel ನಲ್ಲಿ 1, 2, 3… ಎಂದು ಮಾತ್ರ ಇರುತ್ತದೆ — ಪಾಠ, ಭಾಗ, ಗರಿಷ್ಠ ಅಂಕ ಇರುವುದಿಲ್ಲ. ಪ್ರತಿ ಕಾಲಂಗೆ <b>ಬೇಕೇ/ಬೇಡವೇ</b>, <b>ಪಾಠ</b> ಮತ್ತು <b>ಗರಿಷ್ಠ ಅಂಕ</b> ಇಲ್ಲೇ ಗುರುತಿಸಿ. KSRMS ಇದನ್ನು ನೆನಪಿಟ್ಟುಕೊಳ್ಳುತ್ತದೆ — ಮುಂದಿನ ಬಾರಿ ಆಮದು ಮಾಡುವಾಗ ಬೇಡ ಎಂದ ಕಾಲಂಗಳು ಮತ್ತೆ ಬರುವುದಿಲ್ಲ, ಹಳೆಯ ಕಾಲಂಗಳು ಅದೇ ಪಾಠಕ್ಕೆ ಹೋಗುತ್ತವೆ.</div>
+                    <div class="d-flex gap-2 mb-1 small"><button type="button" class="btn btn-link btn-sm p-0" id="impAll">ಎಲ್ಲಾ ಆರಿಸಿ</button>·<button type="button" class="btn btn-link btn-sm p-0" id="impNone">ಯಾವುದೂ ಬೇಡ</button>·<button type="button" class="btn btn-link btn-sm p-0" id="impNew">ಹೊಸ ಕಾಲಂಗಳು ಮಾತ್ರ</button></div>
+                    <div class="table-responsive mb-3"><table class="table table-sm table-bordered align-middle small mb-0">
+                        <thead class="table-light text-center"><tr><th>ಬೇಕೇ?</th><th>ಸರ್ಕಾರಿ ಕಾಲಂ</th><th>ಅಂಕ ಇರುವ ಮಕ್ಕಳು · ಸರಾಸರಿ · ಗರಿಷ್ಠ ಸಿಕ್ಕಿದ್ದು</th><th>ಪಾಠ</th><th style="width:80px;">ಗರಿಷ್ಠ ಅಂಕ</th><th style="width:70px;">KSRMS ಪ.ಸಂ</th></tr></thead>
+                        <tbody>${cols.map(c => `<tr class="impRow" data-i="${c.i}">
+                            <td class="text-center"><input type="checkbox" class="form-check-input impOn" ${c.on ? 'checked' : ''}></td>
+                            <td class="text-center fw-bold">${c.tc.no}${c.ex ? `<div class="fw-normal text-success" style="font-size:10px;">ಹಿಂದೆ ಆಮದಾಗಿದೆ</div>` : (skip.has(c.tc.no) ? `<div class="fw-normal text-danger" style="font-size:10px;">ಹಿಂದೆ ಬೇಡ ಎಂದಿದ್ದೀರಿ</div>` : `<div class="fw-normal text-primary" style="font-size:10px;">ಹೊಸದು</div>`)}</td>
+                            <td class="text-center">${c.count} · ${c.count ? c.avg.toFixed(1) : '-'} · ${c.count ? c.hi : '-'}</td>
+                            <td>${c.ex && (c.ex.lessons || []).length > 1 ? `<div style="font-size:11px;">${c.ex.lessons.map(l => esc(lessonLabel(l))).join('<br>')}</div><input type="hidden" class="impL" value="keep">` : `<select class="form-select form-select-sm impL">${lessonOpts(c.ex && (c.ex.lessons || [])[0])}</select>`}</td>
+                            <td><input type="number" min="1" class="form-control form-control-sm impMax" value="${c.ex ? c.ex.max : (c.hi > 20 ? 25 : 20)}"></td>
+                            <td><input type="number" min="1" class="form-control form-control-sm impNo" value="${c.no}"></td></tr>`).join('')}</tbody></table></div>
+                    <div class="small text-muted mb-2">ಪಟ್ಟಿಯಲ್ಲಿ ಪಾಠ ಇಲ್ಲದಿದ್ದರೆ ಆಮದಿನ ನಂತರ ✏️ ಒತ್ತಿ ಸೇರಿಸಿ. ಒಂದು ಪರೀಕ್ಷೆಗೆ ಹೆಚ್ಚು ಪಾಠಗಳಿದ್ದರೂ ✏️ ಮೂಲಕ ಸೇರಿಸಬಹುದು.</div>
                     <div class="d-flex justify-content-end gap-2"><button type="button" class="btn btn-sm btn-secondary" data-close>ರದ್ದು</button>
-                        <button type="button" class="btn btn-sm btn-success fw-bold" id="impGo" ${matched.length ? '' : 'disabled'}>📥 ${matched.length} ಮಕ್ಕಳ ಅಂಕ ಆಮದು ಮಾಡಿ</button></div>`);
+                        <button type="button" class="btn btn-sm btn-success fw-bold" id="impGo" ${matched.length ? '' : 'disabled'}>📥 ಆರಿಸಿದ ಕಾಲಂಗಳನ್ನು ಆಮದು ಮಾಡಿ</button></div>`);
+                const rowsEl = () => [...w.querySelectorAll('.impRow')];
+                const paint = () => rowsEl().forEach(r => { r.style.opacity = r.querySelector('.impOn').checked ? '1' : '.45'; });
+                rowsEl().forEach(r => r.querySelector('.impOn').onchange = paint); paint();
+                w.querySelector('#impAll').onclick = () => { rowsEl().forEach(r => r.querySelector('.impOn').checked = true); paint(); };
+                w.querySelector('#impNone').onclick = () => { rowsEl().forEach(r => r.querySelector('.impOn').checked = false); paint(); };
+                w.querySelector('#impNew').onclick = () => { rowsEl().forEach(r => { const c = cols[+r.getAttribute('data-i')]; r.querySelector('.impOn').checked = !c.ex && !skip.has(c.tc.no); }); paint(); };
                 w.querySelector('#impGo').onclick = async () => {
                     if (!canEditClass(target.cls)) return alert('ಈ ತರಗತಿಗೆ ನಿಮಗೆ ಅನುಮತಿ ಇಲ್ಲ.');
-                    const maxes = [...w.querySelectorAll('.impMax')].map(x => Number(x.value) || 20);
-                    const ref = db.collection('ksrms_schools').doc(dise()).collection('lba').doc(docKey(gradeOf(target.cls), target.subject, target.medium));
+                    const pick = rowsEl().map(r => {
+                        const c = cols[+r.getAttribute('data-i')];
+                        const lv = r.querySelector('.impL').value;
+                        return { c, on: r.querySelector('.impOn').checked, max: Number(r.querySelector('.impMax').value) || 0, no: Number(r.querySelector('.impNo').value) || 0, lesson: lv === 'keep' ? 'keep' : (lv === '' ? null : lessonPool[+lv]) };
+                    });
+                    const chosen = pick.filter(p => p.on);
+                    if (!chosen.length && !confirm('ಯಾವುದೇ ಕಾಲಂ ಆರಿಸಿಲ್ಲ. ಎಲ್ಲವನ್ನೂ "ಬೇಡ" ಎಂದು ನೆನಪಿಡಬೇಕೇ?')) return;
+                    if (chosen.some(p => !(p.max > 0) || !(p.no > 0))) return alert('ಆರಿಸಿದ ಕಾಲಂಗಳಿಗೆ ಗರಿಷ್ಠ ಅಂಕ ಮತ್ತು KSRMS ಪರೀಕ್ಷೆ ಸಂಖ್ಯೆ ಹಾಕಿ.');
+                    const nos = chosen.map(p => p.no);
+                    if (new Set(nos).size !== nos.length) return alert('ಎರಡು ಕಾಲಂಗಳಿಗೆ ಒಂದೇ KSRMS ಪರೀಕ್ಷೆ ಸಂಖ್ಯೆ ಕೊಟ್ಟಿದ್ದೀರಿ.');
+                    const clash = chosen.find(p => curTests.some(t => Number(t.no) === p.no && t.id !== (p.c.ex && p.c.ex.id)));
+                    if (clash && !confirm(`KSRMS ನಲ್ಲಿ ಈಗಾಗಲೇ ಪರೀಕ್ಷೆ ${clash.no} ಬೇರೆ ಇದೆ. ಆದರೂ ಮುಂದುವರಿಸಬೇಕೇ? (ಎರಡೂ ಉಳಿಯುತ್ತವೆ)`)) return;
+                    const noLesson = chosen.filter(p => !p.lesson).length;
+                    if (noLesson && !confirm(`${noLesson} ಕಾಲಂಗಳಿಗೆ ಪಾಠ ಆರಿಸಿಲ್ಲ — ವರದಿಯಲ್ಲಿ ಪಾಠದ ಹೆಸರು ಬರುವುದಿಲ್ಲ. ಮುಂದುವರಿಸಬೇಕೇ?`)) return;
                     const btn = w.querySelector('#impGo'); btn.disabled = true; btn.textContent = '⏳';
                     try {
-                        const cur = await ref.get();
-                        const curTests = cur.exists ? ((cur.data() || {}).tests || {}) : {};
-                        const tids = testCols.map((tc, i) => {
-                            const ex = Object.keys(curTests).find(id => Number(curTests[id].no) === tc.no);
-                            return ex || ('t' + Date.now().toString(36) + i);
-                        });
+                        const FV = firebase.firestore.FieldValue;
+                        const skipNos = pick.filter(p => !p.on).map(p => p.c.tc.no);
                         await ref.set({ g: gradeOf(target.cls), className: target.cls, subject: target.subject, medium: target.medium, updatedAt: Date.now() }, { merge: true });
+                        if (skipNos.length) await ref.update('importSkip', FV.arrayUnion(...skipNos));
+                        const unSkip = chosen.map(p => p.c.tc.no).filter(n => skip.has(n));
+                        if (unSkip.length) await ref.update('importSkip', FV.arrayRemove(...unSkip));
                         const args = [];
-                        testCols.forEach((tc, i) => {
-                            const ex = curTests[tids[i]] || {};
-                            args.push(FP('tests', tids[i]), { no: tc.no, max: maxes[i], date: ex.date || '', lessons: (ex.lessons || []).map(decL).map(encL), source: 'SATS', updatedAt: Date.now() });
+                        let bad = 0, n = 0;
+                        chosen.forEach((p, k) => {
+                            const tid = p.c.ex ? p.c.ex.id : ('t' + Date.now().toString(36) + k);
+                            const lessons = p.lesson === 'keep' ? (p.c.ex.lessons || []) : (p.lesson ? [p.lesson] : ((p.c.ex && p.c.ex.lessons) || []));
+                            args.push(FP('tests', tid), { no: p.no, satsNo: p.c.tc.no, max: p.max, date: (p.c.ex && p.c.ex.date) || '', lessons: lessons.map(encL), source: 'SATS', updatedAt: Date.now() });
+                            matched.forEach(({ d, st }) => {
+                                const v = d.marks[p.c.i];
+                                if (v === '') return;
+                                const x = Number(v);
+                                if (isNaN(x) || x < 0 || x > p.max) { bad++; return; }
+                                args.push(FP('marks', String(st.id), tid), x); n++;
+                            });
                         });
-                        let bad = 0;
-                        matched.forEach(({ d, st }) => d.marks.forEach((v, i) => {
-                            if (v === '') return;
-                            const n = Number(v);
-                            if (isNaN(n) || n < 0 || n > maxes[i]) { bad++; return; }
-                            args.push(FP('marks', String(st.id), tids[i]), n);
-                        }));
                         for (let i = 0; i < args.length; i += 400) await ref.update(...args.slice(i, i + 400));
                         S.cls = target.cls; S.subject = target.subject; S.medium = target.medium; savePrefs();
                         w.remove();
                         await openLBA();
-                        alert(`✅ ಆಮದು ಪೂರ್ಣ: ${matched.length} ಮಕ್ಕಳು, ${testCols.length} ಪರೀಕ್ಷೆಗಳು.${bad ? `\n⚠️ ${bad} ಅಂಕಗಳು ಗರಿಷ್ಠ ಅಂಕಕ್ಕಿಂತ ಹೆಚ್ಚಿದ್ದರಿಂದ ಬಿಡಲಾಗಿದೆ — ಗರಿಷ್ಠ ಅಂಕ ಪರಿಶೀಲಿಸಿ.` : ''}\n\nಈಗ ಪ್ರತಿ ಪರೀಕ್ಷೆಯ ✏️ ಒತ್ತಿ ಪಾಠಗಳನ್ನು ಆಯ್ಕೆಮಾಡಿ.`);
+                        alert(`✅ ಆಮದು ಪೂರ್ಣ: ${chosen.length} ಪರೀಕ್ಷೆಗಳು, ${matched.length} ಮಕ್ಕಳು.${skipNos.length ? `\n${skipNos.length} ಕಾಲಂಗಳನ್ನು ಬಿಡಲಾಗಿದೆ (ಮುಂದಿನ ಬಾರಿಯೂ ಬಿಡುತ್ತದೆ).` : ''}${bad ? `\n⚠️ ${bad} ಅಂಕಗಳು ಗರಿಷ್ಠ ಅಂಕಕ್ಕಿಂತ ಹೆಚ್ಚಿದ್ದರಿಂದ ಬಿಡಲಾಗಿದೆ — ಗರಿಷ್ಠ ಅಂಕ ಪರಿಶೀಲಿಸಿ.` : ''}`);
                     } catch (e) { btn.disabled = false; btn.textContent = '📥 ಆಮದು'; alert('ಆಮದು ವಿಫಲ: ' + ((e && e.code) || e)); }
                 };
             }
